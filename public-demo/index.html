@@ -1,0 +1,318 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>CareBridge (standalone demo)</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  body { background-color: #f3f7f5; }
+  @keyframes pulse-ring { 0%{box-shadow:0 0 0 0 rgba(220,38,38,.5)} 70%{box-shadow:0 0 0 18px rgba(220,38,38,0)} 100%{box-shadow:0 0 0 0 rgba(220,38,38,0)} }
+  .rec-on { animation: pulse-ring 1.3s infinite; }
+</style>
+</head>
+<body class="text-slate-800 antialiased">
+<!--
+  CareBridge standalone demo (no Node.js required)
+  Open this file in a browser (Chrome/Edge recommended for voice input).
+  Logic mirrors carebridge/lib/convert.ts.
+-->
+<main class="mx-auto max-w-xl px-4 py-6 sm:py-8">
+  <header class="mb-6 text-center">
+    <h1 class="text-4xl sm:text-5xl font-bold tracking-tight text-emerald-700">CareBridge</h1>
+    <p class="mx-auto mt-2 max-w-md text-base leading-relaxed text-slate-600">
+      外国人介護者が高齢者の日本語音声を理解するための、介護特化型 支援アプリ
+    </p>
+  </header>
+
+  <!-- Language select -->
+  <section class="mb-5">
+    <p class="mb-2 text-center text-sm font-semibold text-slate-500">Your language / あなたの言語</p>
+    <div id="langs" class="grid grid-cols-2 sm:grid-cols-4 gap-2"></div>
+  </section>
+
+  <!-- Record -->
+  <section class="mb-5 rounded-2xl bg-white p-5 text-center shadow-sm ring-1 ring-slate-200">
+    <button id="recBtn" class="mx-auto flex h-32 w-32 flex-col items-center justify-center rounded-full bg-emerald-600 text-white shadow-lg transition hover:bg-emerald-700 active:scale-95">
+      <span class="text-5xl">🎤</span><span id="recLabel" class="mt-1 text-base font-bold">REC</span>
+    </button>
+    <p id="recStatus" class="mt-3 text-base font-semibold text-slate-600">Tap to record / 録音する</p>
+    <p id="recWarn" class="mt-2 hidden rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-700"></p>
+  </section>
+
+  <!-- Transcript -->
+  <section class="mb-5">
+    <p class="mb-1 text-sm font-semibold text-slate-500">Resident said (Japanese) / 高齢者の発言</p>
+    <div id="transcript" class="min-h-[3.5rem] rounded-xl border-2 border-dashed border-slate-300 bg-white px-4 py-3 text-xl text-slate-800">
+      <span class="text-slate-400">ここに高齢者の発言が表示されます…</span>
+    </div>
+  </section>
+
+  <!-- Result -->
+  <div id="result" class="scroll-mt-4"></div>
+
+  <!-- Samples -->
+  <section class="mt-6">
+    <p class="mb-2 text-sm font-semibold text-slate-500">Sample phrases / サンプル発言</p>
+    <div id="samples" class="grid grid-cols-2 gap-2"></div>
+  </section>
+
+  <footer class="mt-10 text-center text-xs text-slate-400">
+    CareBridge — bridging caregivers and elderly residents.<br />
+    介護現場の言語の壁を減らす試作品（ルールベースMVP）
+  </footer>
+</main>
+
+<script>
+// ===== Logic (mirror of lib/convert.ts) =====
+const LANGUAGES = [
+  { code:"en", label:"English", flag:"🇬🇧" },
+  { code:"vi", label:"Vietnamese", flag:"🇻🇳" },
+  { code:"id", label:"Indonesian", flag:"🇮🇩" },
+  { code:"fil", label:"Filipino", flag:"🇵🇭" },
+];
+const SAMPLE_PHRASES = ["胸が苦しい","息が苦しい","トイレに行きたい","ご飯はいらない","薬を飲みたくない","ここがどこかわからない","転んだ","頭が痛い"];
+
+const HIGH_URGENCY_KEYWORDS = ["胸","苦しい","息","痛い","倒れた","倒れ","転んだ","転倒","意識","動かない"];
+const TOILET_KEYWORDS = ["トイレ","排泄","おしっこ","便","おむつ"];
+const MEAL_KEYWORDS = ["ご飯","ごはん","食べたくない","いらない","食事","食べ"];
+const MEDICATION_KEYWORDS = ["薬","飲みたくない","服薬"];
+const DEMENTIA_KEYWORDS = ["どこ","わからない","帰りたい","知らない","誰"];
+
+const PHRASE_DICTIONARY = [
+  { match:"胸が苦しい", easyJapanese:"胸が 苦しいです。体調が 悪いです。", caregiver:{ en:"My chest feels tight. I feel unwell.", vi:"Ngực tôi thấy nặng và khó chịu. Tôi thấy không khỏe.", id:"Dada saya terasa sesak. Saya merasa tidak enak badan.", fil:"Masikip ang dibdib ko. Hindi maganda ang pakiramdam ko." } },
+  { match:"息が苦しい", easyJapanese:"息が 苦しいです。うまく 息が できません。", caregiver:{ en:"I'm having trouble breathing.", vi:"Tôi thấy khó thở.", id:"Saya sulit bernapas.", fil:"Nahihirapan akong huminga." } },
+  { match:"トイレに行きたい", easyJapanese:"トイレに 行きたいです。", caregiver:{ en:"I need to go to the toilet.", vi:"Tôi muốn đi vệ sinh.", id:"Saya ingin ke toilet.", fil:"Gusto kong pumunta sa banyo." } },
+  { match:"ご飯はいらない", easyJapanese:"いまは ご飯を 食べたくないです。", caregiver:{ en:"I don't want to eat right now.", vi:"Bây giờ tôi không muốn ăn.", id:"Saya tidak mau makan sekarang.", fil:"Ayaw kong kumain ngayon." } },
+  { match:"薬を飲みたくない", easyJapanese:"薬を 飲みたくないです。", caregiver:{ en:"I don't want to take my medicine.", vi:"Tôi không muốn uống thuốc.", id:"Saya tidak mau minum obat.", fil:"Ayaw kong uminom ng gamot." } },
+  { match:"ここがどこかわからない", easyJapanese:"ここが どこか わかりません。", caregiver:{ en:"I don't know where I am.", vi:"Tôi không biết mình đang ở đâu.", id:"Saya tidak tahu di mana saya berada.", fil:"Hindi ko alam kung nasaan ako." } },
+  { match:"転んだ", easyJapanese:"転びました。", caregiver:{ en:"I fell down.", vi:"Tôi bị ngã.", id:"Saya terjatuh.", fil:"Natumba ako." } },
+  { match:"頭が痛い", easyJapanese:"頭が 痛いです。", caregiver:{ en:"I have a headache.", vi:"Tôi bị đau đầu.", id:"Kepala saya sakit.", fil:"Masakit ang ulo ko." } },
+];
+
+const ACTIONS = {
+  high:{ en:"Call a Japanese staff member or nurse immediately.", vi:"Hãy gọi ngay nhân viên người Nhật hoặc y tá.", id:"Segera panggil staf orang Jepang atau perawat.", fil:"Tawagin agad ang Japanese staff o nurse." },
+  Toileting:{ en:"Help them to the toilet soon. Watch carefully so they don't fall.", vi:"Hãy đưa họ đi vệ sinh sớm. Chú ý để họ không bị ngã.", id:"Antar ke toilet segera. Awasi agar tidak terjatuh.", fil:"Samahan agad sa banyo. Bantayan para hindi matumba." },
+  Meal:{ en:"Do not force them to eat. Check their condition and mood.", vi:"Đừng ép họ ăn. Hãy kiểm tra tình trạng và tâm trạng của họ.", id:"Jangan paksa makan. Periksa kondisi dan suasana hatinya.", fil:"Huwag piliting kumain. Tingnan ang kondisyon at kalagayan nila." },
+  Medication:{ en:"Do not force the medicine. Ask why, and tell a nurse.", vi:"Đừng ép uống thuốc. Hãy hỏi lý do và báo cho y tá.", id:"Jangan paksa minum obat. Tanyakan alasannya dan beri tahu perawat.", fil:"Huwag piliting uminom ng gamot. Itanong ang dahilan at sabihin sa nurse." },
+  Dementia:{ en:"Stay calm, reassure them, and stay close. Tell a Japanese staff member.", vi:"Hãy bình tĩnh, trấn an họ và ở bên cạnh. Báo cho nhân viên người Nhật.", id:"Tetap tenang, tenangkan mereka, dan dampingi. Beri tahu staf orang Jepang.", fil:"Manatiling kalmado, payapain sila, at lumapit. Sabihin sa Japanese staff." },
+  General:{ en:"Listen calmly and check what they need. Ask a Japanese staff member if unsure.", vi:"Hãy lắng nghe bình tĩnh và xem họ cần gì. Nếu không chắc, hãy hỏi nhân viên người Nhật.", id:"Dengarkan dengan tenang dan periksa kebutuhannya. Jika ragu, tanya staf orang Jepang.", fil:"Makinig nang mahinahon at alamin ang kailangan nila. Magtanong sa Japanese staff kung hindi sigurado." },
+};
+
+const GENERIC_CAREGIVER = {
+  Toileting:{ en:"The resident may want to use the toilet.", vi:"Người cao tuổi có thể muốn đi vệ sinh.", id:"Lansia mungkin ingin ke toilet.", fil:"Maaaring gustong pumunta sa banyo ng matanda." },
+  Meal:{ en:"The resident is talking about food or eating.", vi:"Người cao tuổi đang nói về việc ăn uống.", id:"Lansia sedang membicarakan soal makan.", fil:"Tungkol sa pagkain ang sinasabi ng matanda." },
+  Medication:{ en:"The resident is talking about medicine.", vi:"Người cao tuổi đang nói về thuốc.", id:"Lansia sedang membicarakan soal obat.", fil:"Tungkol sa gamot ang sinasabi ng matanda." },
+  "Dementia / Anxiety":{ en:"The resident seems confused or anxious.", vi:"Người cao tuổi có vẻ bối rối hoặc lo lắng.", id:"Lansia tampak bingung atau cemas.", fil:"Mukhang naguguluhan o kabado ang matanda." },
+  General:{ en:"The resident said something. Please ask a Japanese staff member to help.", vi:"Người cao tuổi vừa nói gì đó. Hãy nhờ nhân viên người Nhật giúp đỡ.", id:"Lansia mengatakan sesuatu. Mohon minta bantuan staf orang Jepang.", fil:"May sinabi ang matanda. Pakihingi ng tulong sa Japanese staff." },
+};
+
+const findKeywords = (t, ks) => ks.filter(k => t.includes(k));
+
+function detectCategory(input) {
+  if (findKeywords(input, TOILET_KEYWORDS).length) return { category:"Toileting", hits:findKeywords(input, TOILET_KEYWORDS) };
+  if (findKeywords(input, MEAL_KEYWORDS).length) return { category:"Meal", hits:findKeywords(input, MEAL_KEYWORDS) };
+  if (findKeywords(input, MEDICATION_KEYWORDS).length) return { category:"Medication", hits:findKeywords(input, MEDICATION_KEYWORDS) };
+  if (findKeywords(input, DEMENTIA_KEYWORDS).length) return { category:"Dementia / Anxiety", hits:findKeywords(input, DEMENTIA_KEYWORDS) };
+  return { category:"General", hits:[] };
+}
+function actionKeyFor(urgency, category) {
+  if (urgency === "high") return "high";
+  if (category === "Dementia / Anxiety") return "Dementia";
+  if (["Toileting","Meal","Medication"].includes(category)) return category;
+  return "General";
+}
+function convert(rawInput, lang) {
+  const input = (rawInput || "").trim();
+  if (!input) return null;
+  const highHits = findKeywords(input, HIGH_URGENCY_KEYWORDS);
+  const { category, hits } = detectCategory(input);
+  const urgency = highHits.length > 0 ? "high" : (category !== "General" ? "medium" : "low");
+  const phrase = PHRASE_DICTIONARY.find(p => input.includes(p.match));
+  const easyJapanese = phrase ? phrase.easyJapanese : input;
+  const caregiver = phrase ? phrase.caregiver[lang] : GENERIC_CAREGIVER[category][lang];
+  const recommendedAction = ACTIONS[actionKeyFor(urgency, category)][lang];
+  const emergencyLevel = urgency === "high" ? "High" : urgency === "medium" ? "Medium" : "Low";
+  return { input, easyJapanese, caregiver, emergencyLevel, recommendedAction, category, urgency, matchedKeywords:[...new Set([...highHits, ...hits])] };
+}
+
+// ===== View =====
+const CATEGORY_META = {
+  "Toileting":{ icon:"🚻", color:"bg-sky-100 text-sky-800 border-sky-300" },
+  "Meal":{ icon:"🍚", color:"bg-amber-100 text-amber-800 border-amber-300" },
+  "Medication":{ icon:"💊", color:"bg-violet-100 text-violet-800 border-violet-300" },
+  "Dementia / Anxiety":{ icon:"🧠", color:"bg-rose-100 text-rose-800 border-rose-300" },
+  "General":{ icon:"💬", color:"bg-slate-100 text-slate-700 border-slate-300" },
+};
+const URGENCY_META = {
+  high:{ icon:"🚨", badge:"bg-red-600 text-white", ring:"ring-red-300", head:"bg-red-50" },
+  medium:{ icon:"⚠️", badge:"bg-amber-500 text-white", ring:"ring-amber-200", head:"bg-amber-50" },
+  low:{ icon:"🟢", badge:"bg-emerald-600 text-white", ring:"ring-slate-200", head:"bg-slate-50" },
+};
+const esc = (s) => String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+
+let currentLang = "en";
+let currentTranscript = "";
+
+function field(icon, title, content, highlight) {
+  const box = highlight ? "border-red-300 bg-red-50" : "border-slate-200 bg-slate-50/60";
+  const txt = highlight ? "text-xl font-bold text-red-800" : "text-xl text-slate-800";
+  return `<div class="rounded-xl border p-4 ${box}">
+    <p class="mb-1 flex items-center gap-1.5 text-xs font-bold uppercase tracking-wide text-slate-500"><span class="text-base">${icon}</span>${esc(title)}</p>
+    <p class="leading-relaxed ${txt}">${esc(content)}</p>
+  </div>`;
+}
+function renderResult(r) {
+  const box = document.getElementById("result");
+  if (!r) { box.innerHTML = ""; return; }
+  const u = URGENCY_META[r.urgency], c = CATEGORY_META[r.category];
+  const langLabel = (LANGUAGES.find(l => l.code === currentLang) || {}).label || "Caregiver Language";
+  box.innerHTML = `
+  <section class="mt-2 overflow-hidden rounded-2xl shadow-md ring-2 ${u.ring}">
+    <div class="flex items-center justify-between gap-2 px-5 py-4 ${u.head}">
+      <div>
+        <p class="text-xs font-bold uppercase tracking-wide text-slate-500">Emergency Level</p>
+        <p class="mt-1 inline-flex items-center gap-2 rounded-full px-4 py-1.5 text-2xl font-extrabold ${u.badge}">${u.icon} ${r.emergencyLevel}</p>
+      </div>
+      <span class="inline-flex items-center gap-1 rounded-full border px-3 py-1.5 text-sm font-bold ${c.color}">${c.icon} ${esc(r.category)}</span>
+    </div>
+    <div class="space-y-3 bg-white p-5">
+      ${field("✅","Recommended Action", r.recommendedAction, r.urgency==="high")}
+      ${field("🗣️", "Caregiver Language ("+langLabel+")", r.caregiver, false)}
+      ${field("🇯🇵","Easy Japanese / やさしい日本語", r.easyJapanese, false)}
+      ${r.matchedKeywords.length ? `<p class="pt-1 text-xs text-slate-400">Detected: ${esc(r.matchedKeywords.join(" / "))}</p>` : ""}
+    </div>
+  </section>`;
+}
+
+function setTranscript(text) {
+  currentTranscript = text;
+  const el = document.getElementById("transcript");
+  el.innerHTML = text ? esc(text) : `<span class="text-slate-400">ここに高齢者の発言が表示されます…</span>`;
+}
+function reconvert() { renderResult(currentTranscript ? convert(currentTranscript, currentLang) : null); }
+
+// Language buttons
+const langsEl = document.getElementById("langs");
+function renderLangs() {
+  langsEl.innerHTML = LANGUAGES.map(l => {
+    const on = l.code === currentLang;
+    return `<button data-code="${l.code}" class="flex flex-col items-center gap-1 rounded-xl border-2 px-2 py-3 text-sm font-bold transition ${on?"border-emerald-500 bg-emerald-50 text-emerald-700":"border-slate-200 bg-white text-slate-600 hover:border-emerald-300"}">
+      <span class="text-2xl">${l.flag}</span>${l.label}</button>`;
+  }).join("");
+  langsEl.querySelectorAll("button").forEach(b => b.addEventListener("click", () => {
+    currentLang = b.dataset.code; renderLangs(); reconvert();
+  }));
+}
+renderLangs();
+
+// Sample buttons
+document.getElementById("samples").innerHTML = SAMPLE_PHRASES.map(p =>
+  `<button data-p="${p}" class="rounded-xl border-2 border-slate-200 bg-white px-3 py-4 text-base font-medium text-slate-700 hover:border-emerald-400 hover:bg-emerald-50 active:scale-[0.98] transition">${p}</button>`
+).join("");
+document.getElementById("samples").querySelectorAll("button").forEach(b => b.addEventListener("click", () => {
+  setTranscript(b.dataset.p); reconvert();
+  document.getElementById("result").scrollIntoView({ behavior:"smooth", block:"start" });
+}));
+
+// ===== Web Speech API（堅牢版：マイク許可要求 + 詳細診断）=====
+const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+const recBtn = document.getElementById("recBtn");
+const recLabel = document.getElementById("recLabel");
+const recStatus = document.getElementById("recStatus");
+const recWarn = document.getElementById("recWarn");
+let listening = false, recognition = null, gotResult = false;
+
+function showWarn(html) { recWarn.innerHTML = html; recWarn.classList.remove("hidden"); }
+function hideWarn() { recWarn.classList.add("hidden"); }
+
+const inIframe = window.self !== window.top;       // プレビュー枠など
+const isFile = location.protocol === "file:";       // ダブルクリック直開き
+
+// 起動時の環境チェック（録音が不安定なケースを先に案内）
+if (!SR) {
+  recBtn.disabled = true;
+  recBtn.classList.add("opacity-50","cursor-not-allowed");
+  showWarn("⚠️ このブラウザは音声認識に未対応です。Chrome または Edge で開いてください。<br>Voice input needs Chrome or Edge. You can still use the sample phrases below.");
+} else if (inIframe) {
+  showWarn("🎤 プレビュー枠ではマイクが使えません。<b>ブラウザで直接</b>開いてください（推奨：<code>start-demo.bat</code> をダブルクリック → Chrome/Edge）。<br>Microphone is blocked inside this preview. Please open in a real browser via localhost.");
+} else if (isFile) {
+  showWarn("🎤 <b>file:// で開くとマイクがブロックされます。</b>付属の <code>start-demo.bat</code> をダブルクリックし、<code>http://localhost:8000/demo.html</code> を Chrome/Edge で開いてください。<br>Open via the local server (start-demo.bat) so the microphone works.");
+}
+
+function mapError(code) {
+  switch (code) {
+    case "not-allowed":
+    case "service-not-allowed":
+      return "🚫 マイクの使用が許可されていません。アドレスバーのマイク🎤アイコンから『許可』にしてください。<br>Microphone permission was blocked. Allow it from the address-bar mic icon.";
+    case "no-speech":
+      return "🔇 音声が聞き取れませんでした。マイクに近づいてもう一度お試しください。<br>No speech detected. Please try again, closer to the mic.";
+    case "audio-capture":
+      return "🎙️ マイクが見つかりません。マイクの接続を確認してください。<br>No microphone found. Please check your mic.";
+    case "network":
+      return "🌐 ネットワークエラー、または file:// が原因です。<code>http://localhost</code> で開き、ネット接続を確認してください。<br>Network error (or file://). Open via http://localhost with internet on.";
+    default:
+      return "⚠️ 録音に失敗しました（" + code + "）。Chrome/Edge を localhost で開くと安定します。<br>Recording failed. Use Chrome/Edge over localhost for best results.";
+  }
+}
+
+if (SR) {
+  recognition = new SR();
+  recognition.lang = "ja-JP";
+  recognition.interimResults = true;   // 認識中の途中経過もリアルタイム表示
+  recognition.continuous = false;
+  recognition.maxAlternatives = 1;
+
+  recognition.onresult = (e) => {
+    let finalText = "", interim = "";
+    for (let i = e.resultIndex; i < e.results.length; i++) {
+      const t = e.results[i][0].transcript;
+      if (e.results[i].isFinal) finalText += t; else interim += t;
+    }
+    const text = (finalText || interim).trim();
+    if (text) { gotResult = true; setTranscript(text); if (finalText) reconvert(); }
+  };
+  recognition.onerror = (e) => { showWarn(mapError(e.error)); stopUI(); };
+  recognition.onend = () => { stopUI(); if (gotResult) reconvert(); };
+
+  recBtn.addEventListener("click", startRecording);
+}
+
+async function startRecording() {
+  if (listening) { try { recognition.stop(); } catch {} stopUI(); return; }
+  // 1) マイク許可を明示的に要求（許可ダイアログを確実に出す）
+  try {
+    if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      stream.getTracks().forEach(t => t.stop()); // 許可確認だけなので即停止
+    }
+  } catch (err) {
+    showWarn(mapError(err && err.name === "NotFoundError" ? "audio-capture" : "not-allowed"));
+    return;
+  }
+  // 2) 認識開始
+  hideWarn();
+  gotResult = false;
+  setTranscript("");
+  renderResult(null);
+  try { recognition.start(); startUI(); }
+  catch (e) { /* 連続クリック等は無視 */ }
+}
+
+function startUI() {
+  listening = true;
+  recBtn.classList.remove("bg-emerald-600","hover:bg-emerald-700");
+  recBtn.classList.add("bg-red-600","rec-on");
+  recLabel.textContent = "STOP";
+  recStatus.textContent = "🔴 Listening… 話してください";
+}
+function stopUI() {
+  listening = false;
+  recBtn.classList.add("bg-emerald-600","hover:bg-emerald-700");
+  recBtn.classList.remove("bg-red-600","rec-on");
+  recLabel.textContent = "REC";
+  recStatus.textContent = "Tap to record / 録音する";
+}
+</script>
+</body>
+</html>
